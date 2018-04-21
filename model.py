@@ -189,95 +189,95 @@ class EncoderDecoder(object):
 								tgt_max_len=self.tgt_max_len)
 
 
-		encoder_inputs = itr.source
-		decoder_inputs = itr.target_input
-		target_outputs = itr.target_output
-		source_sequence_length = itr.source_sequence_length
-		tgt_sequence_length = itr.target_sequence_length
-  # decoder_inputs = tf.placeholder(tf.int32, shape=[max_time, batch_size],  name='decoder_inputs')
-  # encoder_inputs = tf.constant(np.array([[1,2,3], [0,1,2]]))
-  # encoder_inputs = tf.placeholder(tf.int32, shape=[max_time, batch_size], name='encoder_inputs')
-  # source_sequence_length = [3,3]
-  # source_sequence_length = tf.placeholder(tf.int32, name='source_sequence_length')
-  # tgt_sequence_length = tf.placeholder(tf.int32, shape=(1,), name='tgt_sequence_length')
+			encoder_inputs = itr.source
+			decoder_inputs = itr.target_input
+			target_outputs = itr.target_output
+			source_sequence_length = itr.source_sequence_length
+			tgt_sequence_length = itr.target_sequence_length
 
-  # Embedding
-  embedding_encoder = tf.get_variable(
-    "embedding_encoder", [src_vocab_size, embedding_size]) 
-  embedding_decoder = tf.get_variable(
-    "embedding_decoder", [tgt_vocab_size, embedding_size])
+			# Embedding
+			embedding_encoder = tf.get_variable(
+				"embedding_encoder", [src_vocab_size, embedding_size]) 
+			embedding_decoder = tf.get_variable(
+				"embedding_decoder", [tgt_vocab_size, embedding_size])
 
-  # Look up embedding:
-  #   encoder_inputs: [max_time, batch_size]
-  #   encoder_emb_inp: [max_time, batch_size, embedding_size]
-  encoder_emb_inp = tf.nn.embedding_lookup(
-    embedding_encoder, encoder_inputs)
-  decoder_emb_inp = tf.nn.embedding_lookup(
-    embedding_decoder, decoder_inputs)
+			# Look up embedding:
+			#   encoder_inputs: [max_time, batch_size]
+			#   encoder_emb_inp: [max_time, batch_size, embedding_size]
+			encoder_emb_inp = tf.nn.embedding_lookup(
+			embedding_encoder, encoder_inputs)
+			decoder_emb_inp = tf.nn.embedding_lookup(
+			embedding_decoder, decoder_inputs)
 
-  # seqs = tf.constant([[0,2,3,4,0], [1,2,3,4,5]])
-  # embedded_seqs = tf.contrib.layers.embed_sequence(seqs, vocab_size=6, embed_dim=3)
-  # return embedded_seqs
+			# Build RNN cell
+			encoder_cell = tf.nn.rnn_cell.BasicLSTMCell(embedding_size)
 
-  # Build RNN cell
-  encoder_cell = tf.nn.rnn_cell.BasicLSTMCell(embedding_size)
+			# Run Dynamic RNN
+			#   encoder_outputs: [max_time, batch_size, num_units]
+			#   encoder_state: [batch_size, num_units]
+			encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
+			  encoder_cell, encoder_emb_inp, dtype=tf.float32,
+			  sequence_length=source_sequence_length, time_major=False)
 
-  # Run Dynamic RNN
-  #   encoder_outputs: [max_time, batch_size, num_units]
-  #   encoder_state: [batch_size, num_units]
-  encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
-      encoder_cell, encoder_emb_inp, dtype=tf.float32,
-      sequence_length=source_sequence_length, time_major=False)
+			# DECODER
+			# Build RNN cell
+			decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(embedding_size)
 
-  # DECODER
-  # Build RNN cell
-  decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(embedding_size)
+			# Helper
+			helper = tf.contrib.seq2seq.TrainingHelper(
+			  decoder_emb_inp, tgt_sequence_length, time_major=False)
 
-  # Helper
-  helper = tf.contrib.seq2seq.TrainingHelper(
-      decoder_emb_inp, tgt_sequence_length, time_major=False)
+			# Projection
+			projection_layer = tf.layers.Dense(
+				  tgt_vocab_size, use_bias=False, name="output_projection")
+
+			# Decoder
+			decoder = tf.contrib.seq2seq.BasicDecoder(
+			  decoder_cell, helper, encoder_state)
+
+			# Dynamic decoding
+			outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, output_time_major=False)
+			# print outputs
+			logits = projection_layer(outputs.rnn_output)
+			
+		return graph, logits
+
+	def fit(self):
+		self.graph, self.logits = self._build_graph()
+		with graph.as_default():
+			crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
+				labels=target_outputs, logits=logits)
+
+			max_time = get_max_time(target_outputs)
+
+			target_weights = tf.sequence_mask(
+				tgt_sequence_length, max_time, dtype=logits.dtype)
+			train_loss = (tf.reduce_sum(crossent * target_weights) /
+				batch_size)
+
+			# Calculate and clip gradients
+			params = tf.trainable_variables()
+			gradients = tf.gradients(train_loss, params)
+			clipped_gradients, _ = tf.clip_by_global_norm(
+				gradients, max_gradient_norm)
+
+			# Optimization
+			optimizer = tf.train.AdamOptimizer(learning_rate)
+			self.update_step = optimizer.apply_gradients(
+				zip(clipped_gradients, params))
+		
+		with tf.Session(graph=graph) as sess:
+			sess.run(tf.global_variables_initializer())
+			sess.run(tf.tables_initializer())
+			sess.run(itr.initializer)
+			
+			step = 0
+			while step < self.max_step:
+				sess.run(update_step)
+				step += 1
+				
+	def predict_score(self, src, tgt):
+		if type(src) == type(tgt) == str:
+			
   
-  # Projection
-  projection_layer = tf.layers.Dense(
-          tgt_vocab_size, use_bias=False, name="output_projection")
-
-  # Decoder
-  decoder = tf.contrib.seq2seq.BasicDecoder(
-      decoder_cell, helper, encoder_state)
-  
-  # Dynamic decoding
-  outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(decoder, output_time_major=False)
-  # print outputs
-  logits = projection_layer(outputs.rnn_output)
-
-  ## Loss
-  if mode == "TRAIN":
-
-    crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=target_outputs, logits=logits)
-    
-    max_time = get_max_time(target_outputs)
-    
-    target_weights = tf.sequence_mask(
-        tgt_sequence_length, max_time, dtype=logits.dtype)
-    train_loss = (tf.reduce_sum(crossent * target_weights) /
-        batch_size)
-
-    # Calculate and clip gradients
-    params = tf.trainable_variables()
-    gradients = tf.gradients(train_loss, params)
-    clipped_gradients, _ = tf.clip_by_global_norm(
-        gradients, max_gradient_norm)
-
-    # Optimization
-    optimizer = tf.train.AdamOptimizer(learning_rate)
-    update_step = optimizer.apply_gradients(
-        zip(clipped_gradients, params))
-    
-    return update_step, train_loss, logits, target_outputs
-  else:
-    loss = None
-
-  return logits
-
 
