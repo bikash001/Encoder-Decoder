@@ -1,1 +1,0 @@
-python train.py data/train.combined data/summaries.txt data/src.txt data/tgt.txt 10 \<s\> \</s\> 0 0
